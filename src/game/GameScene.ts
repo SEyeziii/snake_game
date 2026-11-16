@@ -1,108 +1,178 @@
 import Phaser from 'phaser';
 
-const PLAYER_SPEED = 260;
 
-/**
- * Минимальная рабочая сцена курса.
- *
- * Здесь намеренно почти нет "игры": квадрат двигается, круг можно собирать,
- * растёт счёт. Задача студента — превратить этот каркас в собственную игру.
- */
+const TILE_SIZE = 24;
+const SNAKE_SPEED = 150; 
+
 export class GameScene extends Phaser.Scene {
-  private player!: Phaser.GameObjects.Rectangle;
-  private target!: Phaser.GameObjects.Arc;
-  private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
-  private wasd!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
+  private snake: { x: number, y: number }[] = [];
+  private food!: { x: number, y: number };
+  private direction: { x: number, y: number } = { x: 1, y: 0 };
+  private nextDirection: { x: number, y: number } = { x: 1, y: 0 };
+  
+  private snakeGraphics!: Phaser.GameObjects.Graphics;
+  private foodGraphics!: Phaser.GameObjects.Graphics;
+  
   private scoreText!: Phaser.GameObjects.Text;
   private score = 0;
+  private isGameOver = false;
+  private gameOverText?: Phaser.GameObjects.Text;
+  
+  private moveTimer!: Phaser.Time.TimerEvent;
 
   constructor() {
     super('GameScene');
   }
 
   create(): void {
-    const { width, height } = this.scale;
+    
+    this.isGameOver = false;
+    this.score = 0;
+    this.snake = [{ x: 5, y: 10 }, { x: 4, y: 10 }, { x: 3, y: 10 }]; 
+    this.direction = { x: 1, y: 0 };
+    this.nextDirection = { x: 1, y: 0 };
 
-    this.add
-      .text(width / 2, 28, 'GAME DEV STARTER', {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: '28px',
-        color: '#ffffff',
-      })
-      .setOrigin(0.5, 0);
-
-    this.add
-      .text(width / 2, 68, 'Стрелки / WASD — движение. Остальное придумай сам.', {
-        fontFamily: 'system-ui, sans-serif',
-        fontSize: '18px',
-        color: '#cbd5e1',
-      })
-      .setOrigin(0.5, 0);
-
-    this.player = this.add.rectangle(width / 2, height / 2, 42, 42, 0x38bdf8);
-    this.target = this.add.circle(width * 0.72, height * 0.52, 18, 0xfacc15);
-
-    this.scoreText = this.add.text(24, height - 48, 'Score: 0', {
+    this.snakeGraphics = this.add.graphics();
+    this.foodGraphics = this.add.graphics();
+    
+    this.scoreText = this.add.text(16, 16, 'Score: 0', { 
       fontFamily: 'system-ui, sans-serif',
-      fontSize: '22px',
-      color: '#ffffff',
+      fontSize: '24px', 
+      color: '#ffffff' 
+    });
+    
+    this.add.text(16, 48, 'Пробел - перезапуск', { 
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '16px', 
+      color: '#cbd5e1' 
     });
 
-    if (!this.input.keyboard) {
-      throw new Error('Keyboard input is unavailable.');
+    if (!this.input.keyboard) throw new Error('Keyboard unavailable');
+    
+    this.input.keyboard.on('keydown-UP', () => this.setDirection(0, -1));
+    this.input.keyboard.on('keydown-W', () => this.setDirection(0, -1));
+    this.input.keyboard.on('keydown-DOWN', () => this.setDirection(0, 1));
+    this.input.keyboard.on('keydown-S', () => this.setDirection(0, 1));
+    this.input.keyboard.on('keydown-LEFT', () => this.setDirection(-1, 0));
+    this.input.keyboard.on('keydown-A', () => this.setDirection(-1, 0));
+    this.input.keyboard.on('keydown-RIGHT', () => this.setDirection(1, 0));
+    this.input.keyboard.on('keydown-D', () => this.setDirection(1, 0));
+
+    this.input.keyboard.on('keydown-SPACE', () => {
+      if (this.isGameOver) this.scene.restart();
+    });
+
+    this.moveTimer = this.time.addEvent({
+      delay: SNAKE_SPEED,
+      callback: this.moveSnake,
+      callbackScope: this,
+      loop: true
+    });
+
+    this.spawnFood();
+    this.drawSnake();
+    this.drawFood();
+  }
+
+  private setDirection(x: number, y: number) {
+    // нельзя поворачивать на 180 градусов
+    if (this.direction.x === -x && this.direction.y === -y) return;
+    if (this.isGameOver) return;
+    this.nextDirection = { x, y };
+  }
+
+  private moveSnake() {
+    if (this.isGameOver) return;
+
+    this.direction = { ...this.nextDirection };
+
+    const head = this.snake[0];
+    const newHead = {
+      x: head.x + this.direction.x,
+      y: head.y + this.direction.y
+    };
+
+    // проверка выхода за границы 
+    const maxCols = Math.floor(this.scale.width / TILE_SIZE);
+    const maxRows = Math.floor(this.scale.height / TILE_SIZE);
+
+    if (newHead.x < 0 || newHead.x >= maxCols || newHead.y < 0 || newHead.y >= maxRows) {
+      this.gameOver();
+      return;
     }
 
-    this.cursors = this.input.keyboard.createCursorKeys();
-    this.wasd = this.input.keyboard.addKeys({
-      up: Phaser.Input.Keyboard.KeyCodes.W,
-      down: Phaser.Input.Keyboard.KeyCodes.S,
-      left: Phaser.Input.Keyboard.KeyCodes.A,
-      right: Phaser.Input.Keyboard.KeyCodes.D,
-    }) as Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
-  }
-
-  update(_time: number, delta: number): void {
-    const seconds = delta / 1000;
-    let dx = 0;
-    let dy = 0;
-
-    if (this.cursors.left.isDown || this.wasd.left.isDown) dx -= 1;
-    if (this.cursors.right.isDown || this.wasd.right.isDown) dx += 1;
-    if (this.cursors.up.isDown || this.wasd.up.isDown) dy -= 1;
-    if (this.cursors.down.isDown || this.wasd.down.isDown) dy += 1;
-
-    if (dx !== 0 || dy !== 0) {
-      const length = Math.hypot(dx, dy);
-      this.player.x += (dx / length) * PLAYER_SPEED * seconds;
-      this.player.y += (dy / length) * PLAYER_SPEED * seconds;
+    // проверка столкновения с собой
+    for (let i = 0; i < this.snake.length - 1; i++) {
+      if (this.snake[i].x === newHead.x && this.snake[i].y === newHead.y) {
+        this.gameOver();
+        return;
+      }
     }
 
-    this.keepPlayerOnScreen();
-    this.checkTarget();
+    
+    this.snake.unshift(newHead);
+
+    if (newHead.x === this.food.x && newHead.y === this.food.y) {
+      this.score += 10;
+      this.scoreText.setText(`Score: ${this.score}`);
+      this.spawnFood();
+    } else {
+      this.snake.pop(); 
+    }
+
+    this.drawSnake();
+    this.drawFood();
   }
 
-  private keepPlayerOnScreen(): void {
-    const half = this.player.width / 2;
-    this.player.x = Phaser.Math.Clamp(this.player.x, half, this.scale.width - half);
-    this.player.y = Phaser.Math.Clamp(this.player.y, 110 + half, this.scale.height - half);
+  private gameOver() {
+    this.isGameOver = true;
+    this.moveTimer.destroy();
+    
+    this.gameOverText = this.add.text(this.scale.width / 2, this.scale.height / 2, 'GAME OVER\nНажми ПРОБЕЛ', {
+      fontFamily: 'system-ui, sans-serif',
+      fontSize: '32px',
+      color: '#ef4444',
+      align: 'center'
+    }).setOrigin(0.5);
   }
 
-  private checkTarget(): void {
-    const distance = Phaser.Math.Distance.Between(
-      this.player.x,
-      this.player.y,
-      this.target.x,
-      this.target.y,
-    );
+  private spawnFood() {
+    const maxCols = Math.floor(this.scale.width / TILE_SIZE);
+    const maxRows = Math.floor(this.scale.height / TILE_SIZE);
 
-    if (distance > 42) return;
+    let validPos = false;
+    while (!validPos) {
+      this.food = {
+        x: Phaser.Math.Between(0, maxCols - 1),
+        y: Phaser.Math.Between(0, maxRows - 1)
+      };
+      
+      validPos = !this.snake.some(s => s.x === this.food.x && s.y === this.food.y);
+    }
+  }
 
-    this.score += 1;
-    this.scoreText.setText(`Score: ${this.score}`);
+  private drawSnake() {
+    this.snakeGraphics.clear();
+    this.snake.forEach((segment, index) => {
+      
+      const color = index === 0 ? 0x22c55e : 0x16a34a;
+      this.snakeGraphics.fillStyle(color, 1);
+      this.snakeGraphics.fillRect(
+        segment.x * TILE_SIZE + 2, 
+        segment.y * TILE_SIZE + 2, 
+        TILE_SIZE - 4, 
+        TILE_SIZE - 4
+      );
+    });
+  }
 
-    this.target.setPosition(
-      Phaser.Math.Between(60, this.scale.width - 60),
-      Phaser.Math.Between(140, this.scale.height - 80),
+  private drawFood() {
+    this.foodGraphics.clear();
+    this.foodGraphics.fillStyle(0xef4444, 1); 
+    this.foodGraphics.fillCircle(
+      this.food.x * TILE_SIZE + TILE_SIZE / 2,
+      this.food.y * TILE_SIZE + TILE_SIZE / 2,
+      TILE_SIZE / 3
     );
   }
 }
